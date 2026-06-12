@@ -1,3 +1,21 @@
+const path = require('path');
+// 鎖定讀取同資料夾底下的 .env 檔案
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+
+// 偵錯小幫手：確認 Token 順利注入
+console.log('--- 偵錯資訊 ---');
+console.log('專案絕對路徑:', __dirname);
+console.log('讀取到的 Token 類型:', typeof process.env.DISCORD_TOKEN);
+console.log('讀取到的 Token 長度:', process.env.DISCORD_TOKEN ? process.env.DISCORD_TOKEN.length : 0);
+console.log('----------------');
+
+if (!process.env.DISCORD_TOKEN) {
+  console.error('❌ 錯誤：找不到 DISCORD_TOKEN，請檢查 .env 檔案！');
+  process.exit(1);
+}
+
+// 1. 這裡把 TOKEN 與 Discord 套件先宣告好，確保後面全部讀得到
+const TOKEN = process.env.DISCORD_TOKEN;
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, Partials, ChannelType } = require('discord.js');
 
 const client = new Client({
@@ -9,8 +27,6 @@ const client = new Client({
   partials: [Partials.Message, Partials.Reaction], 
 });
 
-// ⚠️ 請填入你真正的 Discord Bot Token
-const TOKEN = 'MTUxMzg5NjYzNzc2Mjc2ODk1Nw.GyE1qW.4vO6uMYqY8nM7ofeb130KnMafVf8Pm648E06Ro'; 
 const WEBHOOK_NAME = 'EF'; 
 
 const RULES = [
@@ -113,7 +129,6 @@ client.on('interactionCreate', async (interaction) => {
       const isThread = channel.isThread?.() || [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(channel.type);
       const threadId = isThread ? channel.id : undefined;
 
-      // 📝 已還原成最純粹的使用者資訊抓取
       const webhookMessage = await webhook.send({
         content: fixedUrl,
         username: interaction.member?.displayName || interaction.user.username,
