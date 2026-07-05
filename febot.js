@@ -1,5 +1,3 @@
-const path = require('path');
-// 補丁：強制將 Node 16 的 ReadableStream 暴露到全域，解決 undici 報錯
 const { ReadableStream } = require('node:stream/web');
 global.ReadableStream = ReadableStream;
 
