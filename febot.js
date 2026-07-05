@@ -1,8 +1,6 @@
 const path = require('path');
-// 鎖定讀取同資料夾底下的 .env 檔案
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
-// 偵錯小幫手：確認 Token 順利注入
 console.log('--- 偵錯資訊 ---');
 console.log('專案絕對路徑:', __dirname);
 console.log('讀取到的 Token 類型:', typeof process.env.DISCORD_TOKEN);
@@ -14,7 +12,6 @@ if (!process.env.DISCORD_TOKEN) {
   process.exit(1);
 }
 
-// 1. 這裡把 TOKEN 與 Discord 套件先宣告好，確保後面全部讀得到
 const TOKEN = process.env.DISCORD_TOKEN;
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, Partials, ChannelType } = require('discord.js');
 
@@ -43,6 +40,7 @@ const RULES = [
 
 const authorMap = new Map();
 
+// 負責替換網址，並保留使用者輸入的中文與換行
 function fixUrl(text) {
   let hasFixed = false;
   let fixedText = text;
@@ -53,6 +51,13 @@ function fixUrl(text) {
     }
   }
   return hasFixed ? fixedText : null;
+}
+
+// 🌟 新增：專門用來清洗按鈕網址的函式
+// 只抓取合法的網址字元，自動過濾掉後面的中文、空白與換行
+function extractCleanUrl(text) {
+  const match = text.match(/https?:\/\/[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/i);
+  return match ? match[0] : text;
 }
 
 function createOriginalLinkButton(url) {
@@ -112,10 +117,13 @@ client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'fix') {
-    const url = interaction.options.getString('url');
-    const fixedUrl = fixUrl(url);
+    // rawInput 包含了使用者輸入的「網址 + 換行 + 中文」
+    const rawInput = interaction.options.getString('url');
+    
+    // fixedContent 會獲得替換過網址且保留中文的字串
+    const fixedContent = fixUrl(rawInput);
 
-    if (!fixedUrl) {
+    if (!fixedContent) {
       return interaction.reply({ content: '這不屬於支援的網址格式，或者網址無須修復。', ephemeral: true });
     }
 
@@ -124,16 +132,19 @@ client.on('interactionCreate', async (interaction) => {
     try {
       const channel = interaction.channel;
       const webhook = await getOrCreateWebhook(channel);
-      const row = createOriginalLinkButton(url);
+      
+      // 🌟 關鍵修正：抽出純淨網址交給按鈕
+      const cleanOriginalUrl = extractCleanUrl(rawInput);
+      const row = createOriginalLinkButton(cleanOriginalUrl);
       
       const isThread = channel.isThread?.() || [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(channel.type);
       const threadId = isThread ? channel.id : undefined;
 
       const webhookMessage = await webhook.send({
-        content: fixedUrl,
+        content: fixedContent, // 發送帶有中文心得的內容
         username: interaction.member?.displayName || interaction.user.username,
         avatarURL: interaction.user.displayAvatarURL({ dynamic: true }),
-        components: [row],
+        components: [row], // 掛載修復好的純淨網址按鈕
         threadId: threadId 
       });
 
