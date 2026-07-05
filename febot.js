@@ -1,4 +1,11 @@
 const path = require('path');
+// 補丁：強制將 Node 16 的 ReadableStream 暴露到全域，解決 undici 報錯
+const { ReadableStream } = require('node:stream/web');
+global.ReadableStream = ReadableStream;
+
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 console.log('--- 偵錯資訊 ---');
