@@ -4,8 +4,6 @@ global.ReadableStream = ReadableStream;
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
-require('dotenv').config({ path: path.join(__dirname, '.env') });
-
 console.log('--- 偵錯資訊 ---');
 console.log('專案絕對路徑:', __dirname);
 console.log('讀取到的 Token 類型:', typeof process.env.DISCORD_TOKEN);
@@ -18,7 +16,7 @@ if (!process.env.DISCORD_TOKEN) {
 }
 
 const TOKEN = process.env.DISCORD_TOKEN;
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, Partials, ChannelType } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, Partials, ChannelType, MessageFlags } = require('discord.js');
 
 const client = new Client({
   intents: [
@@ -30,36 +28,117 @@ const client = new Client({
 });
 
 const WEBHOOK_NAME = 'EF'; 
+const messageDataMap = new Map();
 
 const RULES = [
-  { pattern: /https?:\/\/(?:[a-z0-9]+\.)?facebook\.com\/([^\s]+)/gi, replacement: "https://facebed.seria.moe/$1" },
-  { pattern: /https?:\/\/fb\.watch\/([^\s]+)/gi, replacement: "https://facebed.seria.moe/watch/$1" },
-  { pattern: /https?:\/\/(?:www\.)?(?:twitter\.com|x\.com)\/([^\s]+)/gi, replacement: "https://fixupx.com/$1" },
-  { pattern: /https?:\/\/(?:www\.)?instagram\.com\/([^\s]+)/gi, replacement: "https://fxig.seria.moe/$1" },
-  { pattern: /https?:\/\/(?:www\.)?threads\.(?:net|com)\/@?([^\s]+)/gi, replacement: "https://fixthreads.seria.moe/$1" },
-  { pattern: /https?:\/\/(?:www\.)?tiktok\.com\/([^\s]+)/gi, replacement: "https://vxtiktok.com/$1" },
-  { pattern: /https?:\/\/(?:www\.)?pixiv\.net\/(?:[\w]*\/)*artworks\/(\d+)([^\s]*)/gi, replacement: "https://phixiv.net/artworks/$1$2" },
-  { pattern: /https?:\/\/(?:www\.)?reddit\.com\/([^\s]+)/gi, replacement: "https://rxddit.com/$1" },
-  { pattern: /https?:\/\/(?:www\.)?bilibili\.com\/video\/([^\s]+)/gi, replacement: "https://biliembed.com/video/$1" },
+  {
+    name: 'Instagram',
+    pattern: /https?:\/\/(?:www\.)?instagram\.com\/([^\s]+)/gi,
+    domains: ["oginstagram.com", "fxig.seria.moe", "d.toinstagram.com", "eeinstagram.com"],
+    buildUrl: (domain, p1) => `https://${domain}/${p1}`
+  },
+  {
+    name: 'X (Twitter)',
+    pattern: /https?:\/\/(?:www\.)?(?:twitter\.com|x\.com)\/([^\s]+)/gi,
+    domains: ["fixupx.com", "vxtwitter.com", "xeezz.com"],
+    buildUrl: (domain, p1) => {
+      if (domain === 'xeezz.com') {
+        const parts = p1.split('/');
+        if (parts.length > 1) {
+          parts[0] = 'i';
+          return `https://${domain}/${parts.join('/')}`;
+        }
+      }
+      return `https://${domain}/${p1}`;
+    }
+  },
+  {
+    name: 'Bilibili',
+    pattern: /https?:\/\/(?:www\.)?bilibili\.com\/video\/([^\s]+)/gi,
+    domains: ["bilibiliez.com", "www.vxbilibili.com"],
+    buildUrl: (domain, p1) => `https://${domain}/video/${p1}`
+  },
+  {
+    name: 'Facebook',
+    pattern: /https?:\/\/(?:[a-z0-9]+\.)?facebook\.com\/([^\s]+)/gi,
+    domains: ["facebed.seria.moe", "facebed.com"],
+    buildUrl: (domain, p1) => `https://${domain}/${p1}`
+  },
+  {
+    name: 'Facebook Watch',
+    pattern: /https?:\/\/fb\.watch\/([^\s]+)/gi,
+    domains: ["facebed.seria.moe", "facebed.com"],
+    buildUrl: (domain, p1) => `https://${domain}/watch/${p1}`
+  },
+  {
+    name: 'Pixiv',
+    pattern: /https?:\/\/(?:www\.)?pixiv\.net\/(?:[\w]*\/)*artworks\/(\d+)([^\s]*)/gi,
+    domains: ["phixiv.net"], 
+    buildUrl: (domain, p1, p2) => `https://${domain}/artworks/${p1}${p2}`
+  },
+  {
+    name: 'PTT',
+    pattern: /https?:\/\/(?:www\.)?ptt\.cc\/([^\s]+)/gi,
+    domains: ["fxptt.seria.moe"],
+    buildUrl: (domain, p1) => `https://${domain}/${p1}`
+  },
+  {
+    name: 'TikTok',
+    pattern: /https?:\/\/(?:[a-zA-Z0-9]+\.)?tiktok\.com\/([^\s]+)/gi,
+    domains: ["tnktok.com", "vxtiktok.com"],
+    buildUrl: (domain, p1) => `https://${domain}/${p1}`
+  },
+  {
+    name: 'Threads',
+    pattern: /https?:\/\/(?:www\.)?threads\.(?:net|com)\/@?([^\s]+)/gi,
+    domains: ["fixthreads.seria.moe", "vxthreads.net"],
+    buildUrl: (domain, p1) => `https://${domain}/${p1}`
+  },
+  {
+    name: 'Reddit',
+    pattern: /https?:\/\/(?:www\.)?reddit\.com\/([^\s]+)/gi,
+    domains: ["rxddit.com"],
+    buildUrl: (domain, p1) => `https://${domain}/${p1}`
+  }
 ];
 
-const authorMap = new Map();
-
-// 負責替換網址，並保留使用者輸入的中文與換行
-function fixUrl(text) {
+function processContent(text, serviceIndex = 0, forceCacheBust = false) {
   let hasFixed = false;
   let fixedText = text;
+  let detectedPlatforms = new Set(); 
+
   for (const rule of RULES) {
+    rule.pattern.lastIndex = 0; 
+
     if (rule.pattern.test(fixedText)) {
-      fixedText = fixedText.replace(rule.pattern, rule.replacement);
       hasFixed = true;
+      detectedPlatforms.add(rule.name);
+      rule.pattern.lastIndex = 0; 
+      
+      fixedText = fixedText.replace(rule.pattern, (...args) => {
+        const domain = rule.domains[serviceIndex % rule.domains.length];
+        const captures = args.slice(1, -2); 
+        let finalUrl = rule.buildUrl(domain, ...captures);
+        
+        if (forceCacheBust) {
+          const qIndex = finalUrl.indexOf('?');
+          if (qIndex !== -1) {
+            finalUrl = finalUrl.substring(0, qIndex) + `?v=${Date.now()}`;
+          } else {
+            finalUrl += `?v=${Date.now()}`;
+          }
+        }
+        return finalUrl;
+      });
     }
   }
-  return hasFixed ? fixedText : null;
+  
+  return { 
+    fixedText: hasFixed ? fixedText : null, 
+    platforms: Array.from(detectedPlatforms) 
+  };
 }
 
-// 🌟 新增：專門用來清洗按鈕網址的函式
-// 只抓取合法的網址字元，自動過濾掉後面的中文、空白與換行
 function extractCleanUrl(text) {
   const match = text.match(/https?:\/\/[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/i);
   return match ? match[0] : text;
@@ -82,7 +161,7 @@ async function getOrCreateWebhook(channel) {
   }
 
   const webhooks = await targetChannel.fetchWebhooks();
-  let webhook = webhooks.find(wh => wh.name === WEBHOOK_NAME);
+  let webhook = webhooks.find(wh => wh.name === WEBHOOK_NAME && wh.owner?.id === client.user.id);
   
   if (!webhook) {
     webhook = await targetChannel.createWebhook({
@@ -93,7 +172,7 @@ async function getOrCreateWebhook(channel) {
   return webhook;
 }
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`登入成功！Bot 已上線 : ${client.user.tag}`);
   const commands = [
     {
@@ -107,6 +186,8 @@ client.once('ready', async () => {
           required: true,
         },
       ],
+      integration_types: [0, 1],
+      contexts: [0, 1, 2],
     },
   ];
   try {
@@ -117,44 +198,71 @@ client.once('ready', async () => {
   }
 });
 
-// 處理斜線指令 (/fix)
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'fix') {
-    // rawInput 包含了使用者輸入的「網址 + 換行 + 中文」
     const rawInput = interaction.options.getString('url');
-    
-    // fixedContent 會獲得替換過網址且保留中文的字串
-    const fixedContent = fixUrl(rawInput);
+    const result = processContent(rawInput, 0, false);
 
-    if (!fixedContent) {
-      return interaction.reply({ content: '這不屬於支援的網址格式，或者網址無須修復。', ephemeral: true });
+    if (!result.fixedText) {
+      return interaction.reply({ 
+        content: '這不屬於支援的網址格式，或者網址無須修復。', 
+        flags: [MessageFlags.Ephemeral] 
+      });
     }
 
-    await interaction.deferReply({ ephemeral: true }).catch(() => {});
+    const { fixedText, platforms } = result;
+    const platformsText = platforms.length > 0 ? platforms.join('、') : '網址';
+    const successMsg = `✅ 已成功發送！\n若 **${platformsText}** 預覽錯誤，先對訊息按 🧲 切換備援，或按 ⛓️‍💥 強制刷新。`;
+
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }).catch(() => {});
 
     try {
       const channel = interaction.channel;
-      const webhook = await getOrCreateWebhook(channel);
       
-      // 🌟 關鍵修正：抽出純淨網址交給按鈕
+      if (!channel || typeof channel.fetchWebhooks !== 'function') {
+        // 🌟 更新：第一則訊息只傳送提示
+        await interaction.editReply({ 
+          content: `✅ 網址修復完成！請長按複製下方獨立訊息：\n*(提示：若預覽未顯示，可自行在網址後方加上 ?v=1 等數字來強制刷新快取)*` 
+        });
+        
+        // 🌟 更新：利用 followUp 傳送第二則純淨的隱藏訊息供手機端完美複製
+        await interaction.followUp({
+          content: fixedText,
+          flags: [MessageFlags.Ephemeral]
+        });
+        return; 
+      }
+
+      const webhook = await getOrCreateWebhook(channel);
       const cleanOriginalUrl = extractCleanUrl(rawInput);
       const row = createOriginalLinkButton(cleanOriginalUrl);
       
       const isThread = channel.isThread?.() || [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(channel.type);
       const threadId = isThread ? channel.id : undefined;
 
+      const username = interaction.member?.displayName || interaction.user.username;
+      const avatarURL = interaction.user.displayAvatarURL({ dynamic: true });
+
       const webhookMessage = await webhook.send({
-        content: fixedContent, // 發送帶有中文心得的內容
-        username: interaction.member?.displayName || interaction.user.username,
-        avatarURL: interaction.user.displayAvatarURL({ dynamic: true }),
-        components: [row], // 掛載修復好的純淨網址按鈕
+        content: fixedText,
+        username: username,
+        avatarURL: avatarURL,
+        components: [row],
         threadId: threadId 
       });
 
-      authorMap.set(webhookMessage.id, interaction.user.id);
-      await interaction.editReply({ content: '✅ 已成功以您的身份修復並發送網址！' }).catch(() => {});
+      messageDataMap.set(webhookMessage.id, {
+        authorId: interaction.user.id,
+        username: username,
+        avatarURL: avatarURL,
+        rawInput: rawInput,
+        serviceIndex: 0,
+        forceCacheBust: false
+      });
+
+      await interaction.editReply({ content: successMsg }).catch(() => {});
 
     } catch (err) {
       console.error('Webhook 發送失敗，詳細錯誤:', err);
@@ -163,9 +271,11 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// 監聽 ❌ 反應
 client.on('messageReactionAdd', async (reaction, user) => {
-  if (user.bot || reaction.emoji.name !== '❌') return;
+  if (user.bot) return;
+
+  const validEmojis = ['❌', '🧲', '⛓️‍💥'];
+  if (!validEmojis.includes(reaction.emoji.name)) return;
 
   if (reaction.partial) {
     try {
@@ -177,20 +287,54 @@ client.on('messageReactionAdd', async (reaction, user) => {
   }
 
   const messageId = reaction.message.id;
+  if (!messageDataMap.has(messageId)) return;
 
-  if (authorMap.has(messageId)) {
-    const originalAuthorId = authorMap.get(messageId);
-    if (user.id === originalAuthorId) {
-      try {
-        await reaction.message.delete();
-        authorMap.delete(messageId);
-        console.log(`訊息 ${messageId} 已被原作者 ${user.username} 刪除。`);
-      } catch (err) {
-        console.error('刪除訊息失敗:', err);
-      }
-    } else {
-      await reaction.users.remove(user.id).catch(() => {});
-    }
+  const data = messageDataMap.get(messageId);
+  if (user.id !== data.authorId) {
+    await reaction.users.remove(user.id).catch(() => {});
+    return;
+  }
+
+  if (reaction.emoji.name === '❌') {
+    try {
+      await reaction.message.delete();
+      messageDataMap.delete(messageId);
+    } catch (err) {}
+    return; 
+  }
+
+  if (reaction.emoji.name === '🧲') {
+    data.serviceIndex += 1;
+  } else if (reaction.emoji.name === '⛓️‍💥') {
+    data.forceCacheBust = true;
+  }
+
+  try {
+    const channel = reaction.message.channel;
+    const webhook = await getOrCreateWebhook(channel);
+    
+    const result = processContent(data.rawInput, data.serviceIndex, data.forceCacheBust);
+    const cleanOriginalUrl = extractCleanUrl(data.rawInput);
+    const row = createOriginalLinkButton(cleanOriginalUrl);
+
+    const isThread = channel.isThread?.() || [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(channel.type);
+    const threadId = isThread ? channel.id : undefined;
+
+    await reaction.message.delete();
+    messageDataMap.delete(messageId); 
+
+    const webhookMessage = await webhook.send({
+      content: result.fixedText,
+      username: data.username, 
+      avatarURL: data.avatarURL, 
+      components: [row],
+      threadId: threadId 
+    });
+
+    messageDataMap.set(webhookMessage.id, data);
+
+  } catch (err) {
+    console.error('重新切換發送訊息失敗:', err);
   }
 });
 
