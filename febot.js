@@ -30,18 +30,24 @@ const client = new Client({
 const WEBHOOK_NAME = 'EF'; 
 const messageDataMap = new Map();
 
+// 🌟 更新：引入全網域備援 fixembed.app，並調整 Threads 優先度
 const RULES = [
   {
     name: 'Instagram',
     pattern: /https?:\/\/(?:www\.)?instagram\.com\/([^\s]+)/gi,
-    domains: ["oginstagram.com", "fxig.seria.moe", "d.toinstagram.com", "eeinstagram.com"],
-    buildUrl: (domain, p1) => `https://${domain}/${p1}`
+    domains: ["oginstagram.com", "fxig.seria.moe", "d.toinstagram.com", "eeinstagram.com", "fixembed.app"],
+    // buildUrl 現在接收 match (完整原始網址)
+    buildUrl: (domain, match, p1) => {
+      if (domain === 'fixembed.app') return `https://fixembed.app/embed?url=${match}`;
+      return `https://${domain}/${p1}`;
+    }
   },
   {
     name: 'X (Twitter)',
     pattern: /https?:\/\/(?:www\.)?(?:twitter\.com|x\.com)\/([^\s]+)/gi,
-    domains: ["fixupx.com", "vxtwitter.com", "xeezz.com"],
-    buildUrl: (domain, p1) => {
+    domains: ["fixupx.com", "vxtwitter.com", "xeezz.com", "fixembed.app"],
+    buildUrl: (domain, match, p1) => {
+      if (domain === 'fixembed.app') return `https://fixembed.app/embed?url=${match}`;
       if (domain === 'xeezz.com') {
         const parts = p1.split('/');
         if (parts.length > 1) {
@@ -55,50 +61,58 @@ const RULES = [
   {
     name: 'Bilibili',
     pattern: /https?:\/\/(?:www\.)?bilibili\.com\/video\/([^\s]+)/gi,
-    domains: ["bilibiliez.com", "www.vxbilibili.com"],
-    buildUrl: (domain, p1) => `https://${domain}/video/${p1}`
+    domains: ["bilibiliez.com", "www.vxbilibili.com", "fixembed.app"],
+    buildUrl: (domain, match, p1) => {
+      if (domain === 'fixembed.app') return `https://fixembed.app/embed?url=${match}`;
+      return `https://${domain}/video/${p1}`;
+    }
   },
+  {
+    name: 'Threads',
+    pattern: /https?:\/\/(?:www\.)?threads\.(?:net|com)\/@?([^\s]+)/gi,
+    // 依據您的要求：1. seria.moe, 2. fixembed.app, 3. vxthreads.net
+    domains: ["fixthreads.seria.moe", "fixembed.app", "vxthreads.net"],
+    buildUrl: (domain, match, p1) => {
+      if (domain === 'fixembed.app') return `https://fixembed.app/embed?url=${match}`;
+      return `https://${domain}/${p1}`;
+    }
+  },
+  // --- 以下維持原樣 ---
   {
     name: 'Facebook',
     pattern: /https?:\/\/(?:[a-z0-9]+\.)?facebook\.com\/([^\s]+)/gi,
     domains: ["facebed.seria.moe", "facebed.com"],
-    buildUrl: (domain, p1) => `https://${domain}/${p1}`
+    buildUrl: (domain, match, p1) => `https://${domain}/${p1}`
   },
   {
     name: 'Facebook Watch',
     pattern: /https?:\/\/fb\.watch\/([^\s]+)/gi,
     domains: ["facebed.seria.moe", "facebed.com"],
-    buildUrl: (domain, p1) => `https://${domain}/watch/${p1}`
+    buildUrl: (domain, match, p1) => `https://${domain}/watch/${p1}`
   },
   {
     name: 'Pixiv',
     pattern: /https?:\/\/(?:www\.)?pixiv\.net\/(?:[\w]*\/)*artworks\/(\d+)([^\s]*)/gi,
     domains: ["phixiv.net"], 
-    buildUrl: (domain, p1, p2) => `https://${domain}/artworks/${p1}${p2}`
+    buildUrl: (domain, match, p1, p2) => `https://${domain}/artworks/${p1}${p2}`
   },
   {
     name: 'PTT',
     pattern: /https?:\/\/(?:www\.)?ptt\.cc\/([^\s]+)/gi,
     domains: ["fxptt.seria.moe"],
-    buildUrl: (domain, p1) => `https://${domain}/${p1}`
+    buildUrl: (domain, match, p1) => `https://${domain}/${p1}`
   },
   {
     name: 'TikTok',
     pattern: /https?:\/\/(?:[a-zA-Z0-9]+\.)?tiktok\.com\/([^\s]+)/gi,
     domains: ["tnktok.com", "vxtiktok.com"],
-    buildUrl: (domain, p1) => `https://${domain}/${p1}`
-  },
-  {
-    name: 'Threads',
-    pattern: /https?:\/\/(?:www\.)?threads\.(?:net|com)\/@?([^\s]+)/gi,
-    domains: ["fixthreads.seria.moe", "vxthreads.net"],
-    buildUrl: (domain, p1) => `https://${domain}/${p1}`
+    buildUrl: (domain, match, p1) => `https://${domain}/${p1}`
   },
   {
     name: 'Reddit',
     pattern: /https?:\/\/(?:www\.)?reddit\.com\/([^\s]+)/gi,
     domains: ["rxddit.com"],
-    buildUrl: (domain, p1) => `https://${domain}/${p1}`
+    buildUrl: (domain, match, p1) => `https://${domain}/${p1}`
   }
 ];
 
@@ -116,16 +130,25 @@ function processContent(text, serviceIndex = 0, forceCacheBust = false) {
       rule.pattern.lastIndex = 0; 
       
       fixedText = fixedText.replace(rule.pattern, (...args) => {
+        const match = args[0]; // 🌟 擷取完整原網址，供 fixembed.app 使用
         const domain = rule.domains[serviceIndex % rule.domains.length];
         const captures = args.slice(1, -2); 
-        let finalUrl = rule.buildUrl(domain, ...captures);
         
+        let finalUrl = rule.buildUrl(domain, match, ...captures);
+        
+        // ⛓️‍💥 快取破壞邏輯
         if (forceCacheBust) {
-          const qIndex = finalUrl.indexOf('?');
-          if (qIndex !== -1) {
-            finalUrl = finalUrl.substring(0, qIndex) + `?v=${Date.now()}`;
+          if (domain === 'fixembed.app') {
+            // 如果是 fixembed，它本身就有 ?url=，所以用 &v= 來附加參數，避免破壞原網址
+            finalUrl += `&v=${Date.now()}`;
           } else {
-            finalUrl += `?v=${Date.now()}`;
+            // 其他一般網域，截斷原有的追蹤碼 (?) 並替換成時間戳
+            const qIndex = finalUrl.indexOf('?');
+            if (qIndex !== -1) {
+              finalUrl = finalUrl.substring(0, qIndex) + `?v=${Date.now()}`;
+            } else {
+              finalUrl += `?v=${Date.now()}`;
+            }
           }
         }
         return finalUrl;
@@ -214,7 +237,7 @@ client.on('interactionCreate', async (interaction) => {
 
     const { fixedText, platforms } = result;
     const platformsText = platforms.length > 0 ? platforms.join('、') : '網址';
-    const successMsg = `✅ 已成功發送！\n若 **${platformsText}** 預覽錯誤，先對訊息按 🧲 切換備援，或按 ⛓️‍💥 強制刷新。`;
+    const successMsg = `✅ 已成功發送！\n若 **${platformsText}** 的預覽未正常顯示，可對此訊息按 🧲 切換備援服務，或按 ⛓️‍💥 強制刷新快取。`;
 
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }).catch(() => {});
 
@@ -222,12 +245,10 @@ client.on('interactionCreate', async (interaction) => {
       const channel = interaction.channel;
       
       if (!channel || typeof channel.fetchWebhooks !== 'function') {
-        // 🌟 更新：第一則訊息只傳送提示
         await interaction.editReply({ 
           content: `✅ 網址修復完成！請長按複製下方獨立訊息：\n*(提示：若預覽未顯示，可自行在網址後方加上 ?v=1 等數字來強制刷新快取)*` 
         });
         
-        // 🌟 更新：利用 followUp 傳送第二則純淨的隱藏訊息供手機端完美複製
         await interaction.followUp({
           content: fixedText,
           flags: [MessageFlags.Ephemeral]
